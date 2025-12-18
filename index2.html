@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rescue Mode: Particles</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: monospace; }
+        canvas { display: block; position: absolute; top: 0; left: 0; z-index: 1; }
+        
+        #video-container {
+            position: absolute; top: 10px; left: 10px;
+            width: 160px; height: 120px;
+            border: 2px solid #333; z-index: 10;
+            transform: scaleX(-1);
+        }
+        #input_video { width: 100%; height: 100%; object-fit: cover; background: #222; }
+        
+        #ui {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center; z-index: 20;
+            color: #0ff;
+            background: rgba(0,0,0,0.8);
+            padding: 40px; border: 1px solid #333;
+            border-radius: 10px;
+        }
+        
+        button {
+            background: #0ff; color: #000; border: none;
+            padding: 10px 20px; font-size: 1rem; cursor: pointer;
+            margin-top: 20px; font-weight: bold;
+        }
+        button:hover { background: #fff; }
+    </style>
+</head>
+<body>
+
+    <div id="video-container">
+        <video id="input_video" playsinline autoplay muted></video>
+    </div>
+
+    <div id="ui" style="display:block;">
+        <h1 id="status">INITIALIZING CAMERA...</h1>
+        <div id="error-msg" style="color:red; font-size:0.8rem; margin-top:10px;"></div>
+        <button id="retry-btn" onclick="startCamera()" style="display:none;">TRY AGAIN</button>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.136.0/build/three.module.js';
+
+        // --- SAFE CONFIG ---
+        // We start low to ensure camera loads first, then we can bump it
+        const PARTICLE_COUNT = 35000; 
+        const PARTICLE_SIZE = 0.5;
+
+        let scene, camera, renderer, particles;
+        let positions, colors, targetPositions = [], targetColors = [];
+        let videoElement = document.getElementById('input_video');
+        let ui = document.getElementById('ui');
+        let status = document.getElementById('status');
+        let isCameraRunning = false;
+        
+        const state = { handX: 0.5, handY: 0.5, isFist: false, pinchDetected: false };
+        const shapes = ['sphere', 'cube', 'torus', 'heart', 'pyramid'];
+        let currentShape = 'sphere';
+        let shapeIndex = 0;
+
+        // --- 1. ROBUST CAMERA STARTUP ---
+        window.startCamera = async function() {
+            const errorMsg = document.getElementById('error-msg');
+            const retryBtn = document.getElementById('retry-btn');
+            
+            status.innerText = "REQUESTING ACCESS...";
+            errorMsg.innerText = "";
+            retryBtn.style.display = "none";
+
+            try {
+                // STOP any existing tracks first
+                if(videoElement.srcObject) {
+                    videoElement.srcObject.getTracks().forEach(t => t.stop());
+                }
+
+                // Request simplest video possible (no resolution constraints)
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: true,
+                    audio: false
+                });
+
+                videoElement.srcObject = stream;
+                
+                // Wait for video to actually play
+                videoElement.onloadeddata = () => {
+                    status.innerText = "VISION ENGINE STARTING...";
+                    isCameraRunning = true;
+                    ui.style.display = 'none'; // Hide loading screen
+                    initThree(); // Start 3D only after camera works
+                    predictWebcam();
+                };
+
+            } catch (err) {
+                console.error(err);
+                status.innerText = "CAMERA FAILED";
+                errorMsg.innerText = err.name + ": " + err.message;
+                retryBtn.style.display = "inline-block";
+            }
+        };
+
+        // --- 2. VISION AI ---
+        const Hands = window.Hands;
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 0, // LOWER COMPLEXITY FOR SPEED
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        hands.onResults((results) => {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const lm = results.multiHandLandmarks[0];
+                state.handX = 1.0 - lm[9].x; 
+                state.handY = lm[9].y;
+
+                // FIST Check
+                const isClosed = (tip, pip) => lm[tip].y > lm[pip].y;
+                state.isFist = isClosed(12, 10) && isClosed(16, 14) && isClosed(20, 18);
+
+                // PINCH Check
+                const dx = lm[4].x - lm[8].x;
+                const dy = lm[4].y - lm[8].y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                if (dist < 0.05) {
+                    if (!state.pinchDetected) {
+                        state.pinchDetected = true;
+                        switchShape();
+                    }
+                } else {
+                    state.pinchDetected = false;
+                }
+            }
+        });
+
+        async function predictWebcam() {
+            if (isCameraRunning && videoElement.readyState >= 2) {
+                await hands.send({image: videoElement});
+            }
+            requestAnimationFrame(predictWebcam);
+        }
+
+        // --- 3. THREE.JS ENGINE ---
+        function initThree() {
+            if(scene) return; // Prevent double init
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050505);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 60;
+
+            renderer = new THREE.WebGLRenderer({ antialias: false });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            document.body.appendChild(renderer.domElement);
+
+            // Particles
+            const geometry = new THREE.BufferGeometry();
+            const pos = new Float32Array(PARTICLE_COUNT * 3);
+            const col = new Float32Array(PARTICLE_COUNT * 3);
+
+            for(let i=0; i<PARTICLE_COUNT*3; i++) {
+                pos[i] = (Math.random()-0.5)*100;
+                col[i] = 1.0;
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(col, 3));
+
+            const material = new THREE.PointsMaterial({
+                size: PARTICLE_SIZE,
+                color: 0xffffff,
+                vertexColors: true,
+                blending: THREE.AdditiveBlending,
+                transparent: true,
+                opacity: 0.9,
+                depthWrite: false
+            });
+
+            particles = new THREE.Points(geometry, material);
+            scene.add(particles);
+            
+            calculateTargetPositions('sphere');
+            
+            animate();
+        }
+
+        // --- MATH & LOGIC ---
+        function calculateTargetPositions(shape) {
+            targetPositions = new Float32Array(PARTICLE_COUNT * 3);
+            targetColors = new Float32Array(PARTICLE_COUNT * 3);
+            
+            let c = {r:0, g:0.8, b:1}; // Default Blue
+            if(shape === 'heart') c = {r:1, g:0, b:0.2};
+            if(shape === 'cube') c = {r:0.2, g:1, b:0.2};
+            if(shape === 'pyramid') c = {r:1, g:0.8, b:0};
+            if(shape === 'torus') c = {r:0.8, g:0, b:1};
+
+            for(let i=0; i<PARTICLE_COUNT; i++) {
+                let x,y,z;
+                
+                if(shape === 'sphere') {
+                    const r = 22;
+                    const theta = Math.random() * Math.PI * 2;
+                    const phi = Math.acos((Math.random() * 2) - 1);
+                    x = r * Math.sin(phi) * Math.cos(theta);
+                    y = r * Math.sin(phi) * Math.sin(theta);
+                    z = r * Math.cos(phi);
+                }
+                else if(shape === 'cube') {
+                    const s = 30;
+                    const face = Math.floor(Math.random()*6);
+                    const a=(Math.random()-0.5)*s, b=(Math.random()-0.5)*s, d=s/2;
+                    if(face===0) {x=d;y=a;z=b;} if(face===1) {x=-d;y=a;z=b;}
+                    if(face===2) {y=d;x=a;z=b;} if(face===3) {y=-d;x=a;z=b;}
+                    if(face===4) {z=d;x=a;y=b;} if(face===5) {z=-d;x=a;y=b;}
+                }
+                else if(shape === 'torus') {
+                    const R=20, r=7, u=Math.random()*6.28, v=Math.random()*6.28;
+                    x=(R+r*Math.cos(v))*Math.cos(u);
+                    y=(R+r*Math.cos(v))*Math.sin(u);
+                    z=r*Math.sin(v);
+                }
+                else if(shape === 'heart') {
+                   const t=Math.random()*Math.PI, p=Math.random()*6.28;
+                   x=16*Math.pow(Math.sin(t),3)*Math.cos(p);
+                   y=13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t);
+                   z=16*Math.pow(Math.sin(t),3)*Math.sin(p);
+                }
+                else { // Pyramid
+                    const s=30, h=25, yn=Math.random(), sc=1-yn;
+                    const side=Math.floor(Math.random()*4), spr=(Math.random()-0.5)*s*sc, d=(s/2)*sc;
+                    y=-(yn*h-h/2);
+                    if(side===0){x=spr;z=d;} if(side===1){x=spr;z=-d;}
+                    if(side===2){z=spr;x=d;} if(side===3){z=spr;x=-d;}
+                }
+
+                const idx = i*3;
+                targetPositions[idx] = x; targetPositions[idx+1] = y; targetPositions[idx+2] = z;
+                targetColors[idx] = c.r; targetColors[idx+1] = c.g; targetColors[idx+2] = c.b;
+            }
+        }
+
+        function switchShape() {
+            shapeIndex = (shapeIndex + 1) % shapes.length;
+            calculateTargetPositions(shapes[shapeIndex]);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if(!particles) return;
+
+            const pos = particles.geometry.attributes.position.array;
+            const col = particles.geometry.attributes.color.array;
+            const exp = state.isFist ? 3.0 : 1.0;
+
+            for(let i=0; i<PARTICLE_COUNT; i++) {
+                const ix = i*3;
+                if(targetPositions.length > 0) {
+                    pos[ix] += (targetPositions[ix]*exp - pos[ix]) * 0.1;
+                    pos[ix+1] += (targetPositions[ix+1]*exp - pos[ix+1]) * 0.1;
+                    pos[ix+2] += (targetPositions[ix+2]*exp - pos[ix+2]) * 0.1;
+
+                    col[ix] += (targetColors[ix] - col[ix]) * 0.05;
+                    col[ix+1] += (targetColors[ix+1] - col[ix+1]) * 0.05;
+                    col[ix+2] += (targetColors[ix+2] - col[ix+2]) * 0.05;
+                }
+            }
+            particles.geometry.attributes.position.needsUpdate = true;
+            particles.geometry.attributes.color.needsUpdate = true;
+
+            particles.rotation.y += ((state.handX-0.5)*4 - particles.rotation.y) * 0.1;
+            particles.rotation.x += ((state.handY-0.5)*4 - particles.rotation.x) * 0.1;
+            
+            renderer.render(scene, camera);
+        }
+
+        // Start
+        startCamera();
+
+    </script>
+</body>
+</html>
