@@ -8,9 +8,7 @@ Shape Morphing: Smoothly interpolates particle positions between mathematical fo
 
 Physics Interactions:Rotate: Move hand Left/Right/Up/Down to rotate the hologram.Explode: Clench your fist to trigger a "Supernova" expansion effect and color shift.Switch: Pinch (Index + Thumb) to cycle through different geometric templates.🎨 Dynamic Visuals: Custom glowing sprite textures and additive blending for a "Neon/Holographic" aesthetic.🛠 Tech StackLanguage: Vanilla JavaScript (ES6 Modules)3D Engine: Three.js (WebGL)Computer Vision: MediaPipe HandsEnvironment: Native Browser (No Node.js/Webpack build step required)
 
-How to RunSince this project uses ES Modules and webcam access, it requires a local server (it will not work if you just double-click index.html).Option 1: VS Code (Recommended)Clone this repository.Install the "Live Server" extension in VS Code.Right-click index.html and select "Open with Live Server".Allow Camera permissions when prompted.Option 2: Python Simple ServerIf you have Python installed, you can run:Bash# In the project folder
-python -m http.server 8000
-# Then open http://localhost:8000 in your browser
+How to RunSince this project uses ES Modules and webcam access, it requires a local server (it will not work if you just double-click index.html).Option 1: VS Code (Recommended)Clone this repository.Install the "Live Server" extension in VS Code.Right-click index.html and select "Open with Live Server".Allow Camera permissions when prompted.Option 2: Python Simple ServerIf you have Python installed, you can run:Bash# 
 
  ControlsGestureActionMove Hand (X/Y)Rotates the 3D ObjectMove Hand (Z-Depth)Zooms In (Closer) / Zooms Out (Further)Pinch (👌)Morphs to the next shape (Sphere → Cube → Heart...)Fist (✊)Triggers "Explosion" mode and color shift
  
